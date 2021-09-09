@@ -1,0 +1,18 @@
+[package]
+name = "sev-attestation-server"
+version = "0.1.0"
+authors = ["Sergio Lopez <slp@redhat.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+actix-web = "3.3.2"
+clap = "3.0.0-beta.4"
+codicon = "3.0.0"
+lazy_static = "1.4.0"
+libc = "*"
+serde = "1.0.125"
+serde_json = "1.0.64"
+sev = { version = "0.1.0", features = [ "openssl" ] }
+uuid = { version = "0.8.2", features = ["serde", "v4"] }
