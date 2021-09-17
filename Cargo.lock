@@ -302,21 +302,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "attestation-test"
-version = "0.1.0"
-dependencies = [
- "actix-web",
- "clap",
- "codicon",
- "lazy_static",
- "libc",
- "serde",
- "serde_json",
- "sev",
- "uuid",
-]
-
-[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1531,6 +1516,21 @@ dependencies = [
  "openssl",
  "serde",
  "serde_bytes",
+]
+
+[[package]]
+name = "sev-attestation-server"
+version = "0.1.0"
+dependencies = [
+ "actix-web",
+ "clap",
+ "codicon",
+ "lazy_static",
+ "libc",
+ "serde",
+ "serde_json",
+ "sev",
+ "uuid",
 ]
 
 [[package]]

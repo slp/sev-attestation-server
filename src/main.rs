@@ -11,17 +11,29 @@ use libc::{c_char, size_t};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sev::certs::Chain;
-use sev::launch::{Measurement, Policy, Start};
+use sev::launch::{Measurement, Policy, PolicyFlags, Start};
 use sev::session::{Initialized, Session};
-use sev::Build;
+use sev::{Build, Version};
 use uuid::Uuid;
+
+mod vmsa;
+use vmsa::{VMSA_AP, VMSA_BP};
 
 const CMDLINE_PROLOG: &str = "reboot=k panic=-1 panic_print=0 pci=off nomodules console=hvc0 quiet rw no-kvmapf init=/bin/sh virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 virtio_mmio.device=4K@0xd0002000:7 virtio_mmio.device=4K@0xd0003000:8 swiotlb=65536 KRUN_WORKDIR=/";
 const CMDLINE_EPILOG: &str = "-- \0";
 
+#[derive(Default)]
+struct Config {
+    /// Whether guests be requested to use SEV-ES or plain SEV.
+    sev_es: bool,
+    /// The expected number of CPUs for the Guest.
+    num_cpus: u8,
+}
+
 lazy_static! {
     static ref SESSIONS: Mutex<HashMap<String, SessionData>> = Mutex::new(HashMap::new());
     static ref CMDLINE: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    static ref CONFIG: Mutex<Config> = Mutex::new(Config::default());
 }
 
 struct SessionData {
@@ -54,7 +66,22 @@ struct MeasurementResponse {
 async fn session(session_req: web::Json<SessionRequest>) -> HttpResponse {
     let chain: Chain = serde_json::from_str(&json!(session_req.chain).to_string()).unwrap();
 
-    let policy = Policy::default();
+    let sev_es = CONFIG.lock().unwrap().sev_es;
+
+    let policy = if sev_es {
+        Policy {
+            flags: PolicyFlags::NO_DEBUG
+                | PolicyFlags::NO_KEY_SHARING
+                | PolicyFlags::NO_SEND
+                | PolicyFlags::DOMAIN
+                | PolicyFlags::ENCRYPTED_STATE
+                | PolicyFlags::SEV,
+            minfw: Version::default(),
+        }
+    } else {
+        Policy::default()
+    };
+
     let session = Session::try_from(policy).unwrap();
     let start = session.start(chain).unwrap();
 
@@ -113,6 +140,19 @@ async fn attestation(param: web::Path<String>, json: web::Json<Measurement>) -> 
         session.update_data(kernel_data).unwrap();
         session.update_data(initrd_data).unwrap();
 
+        let (sev_es, num_cpus) = {
+            let config = CONFIG.lock().unwrap();
+            (config.sev_es, config.num_cpus)
+        };
+
+        if sev_es {
+            session.update_data(&VMSA_BP).unwrap();
+
+            for _ in 1..num_cpus {
+                session.update_data(&VMSA_AP).unwrap();
+            }
+        }
+
         match session.verify(session_data.build, *json) {
             Err(_) => {
                 println!("/attestation: verification failed for id={}", param.0);
@@ -149,6 +189,15 @@ struct Opts {
     /// Address to bind.
     #[clap(long, default_value = "0.0.0.0")]
     address: String,
+    /// If enabled, guests will be requested to use SEV-ES instead of plain SEV.
+    #[clap(short, long = "sev-es")]
+    sev_es: bool,
+    /// The number of CPUs configured in the guest.
+    #[clap(short = 'c', long = "cpus", default_value = "1")]
+    num_cpus: u8,
+    /// The amount of RAM (MiB) configured in the guest.
+    #[clap(short = 'm', long = "mem", default_value = "2048")]
+    ram_mib: u32,
 }
 
 #[actix_web::main]
@@ -159,11 +208,22 @@ async fn main() -> std::io::Result<()> {
 
     CMDLINE.lock().unwrap().extend_from_slice(
         format!(
-            "{} KRUN_PASS={} KRUN_INIT={} {}",
-            CMDLINE_PROLOG, opts.passphrase, opts.entry, CMDLINE_EPILOG
+            "KRUN_CFG={}:{} {} KRUN_PASS={} KRUN_INIT={} {}",
+            opts.num_cpus,
+            opts.ram_mib,
+            CMDLINE_PROLOG,
+            opts.passphrase,
+            opts.entry,
+            CMDLINE_EPILOG
         )
         .as_bytes(),
     );
+
+    {
+        let mut config = CONFIG.lock().unwrap();
+        config.sev_es = opts.sev_es;
+        config.num_cpus = opts.num_cpus;
+    }
 
     HttpServer::new(|| {
         App::new()
